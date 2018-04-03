@@ -19,7 +19,7 @@
 # To install this file, place it in directory (with +x mod):
 # /etc/NetworkManager/dispatcher.d
 #
-# For each new SSID, after a first connection, complete the generated file
+# For each new SSID, after a first connection, complete the genreated file
 # /etc/proxydriver.d/<ssid_name>.conf and then re-connect to AP, proxy is now set!
 #
 
@@ -45,10 +45,14 @@ then
 
 	[ -d "$conf_dir" ] || mkdir --parents "$conf_dir"
 	
-	if type -P nmcli &>/dev/null
+	if type nmcli &>/dev/null
 	then
-        ## working with: nmcli tool, version 1.4.2
-        networkID=`nmcli -t -f active,ssid dev wifi | egrep '^yes' | cut -d':' -f2`
+		# retrieve connection/vpn name
+		#networkID=`nmcli -t -f name,devices,vpn con status | \
+		#	awk -F':' "BEGIN { device=\"$1\"; event=\"$2\" } \
+		#		event == \"up\" && \\$2 == device && \\$3 == \"no\" { print \\$1 } \
+		#		event == \"vpn-up\" && \\$3 == \"yes\" { print \"vpn_\" \\$1 }"`
+		networkID=`nmcli -f NAME,DEVICE -t c | sed -ne '/:'$1'$/p' |cut -d: -f1`
 	else
 		# try ESSID if nmcli is not installed
 		logger -p user.notice -t $log_tag "nmcli not detected, will use essid"
@@ -62,7 +66,8 @@ then
 	
 	# strip out anything hostile to the file system
 	networkID=`echo "$networkID" | tr -c '[:alnum:]-' '_' | sed 's/.$/\n/'`
-	logger -p user.notice -t $log_tag "network ID: $networkID"
+
+	echo $networkID
 
 	conf="$conf_dir/$networkID.conf"
 
@@ -78,17 +83,8 @@ then
 # configuration file for proxydriver
 # file auto-generated, please complete me!
 
-# manage proxy configuration for network interface when an event is dispatched
-# for the current network configuration
-# if value is ['true'|'1'|'yes'] then proxy configuration will be updated
-# else the proxy configuration will not be updated
-managed='true'
-
 # proxy active or not
 enabled='false'
-
-# change proxy details only for environment
-only_env='false'
 
 # proxy configuration is given by HTTP proxy auto-config (PAC)
 # if used, remove comment char '#' at begin of the line
@@ -122,24 +118,16 @@ ignorelist='localhost,127.0.0.0/8,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12'
 
 EOF
 
-		chown root:dip "$conf"
+		chown root:root "$conf"
 		chmod 0664 "$conf"
 
 	fi
 
 	# read configfile
-	logger -p user.notice -t $log_tag "reading configuration file '$conf'"
 	source "$conf"
-
-	# check is network is unmanaged
-	if [ "$managed" != 'true' -a "$managed" != '1' -a "$managed" != 'yes' ]
-	then
-		logger -p user.notice -t $log_tag "proxy configuation handling skipped for unmanaged network '$networkID'"
-		exit 0
-	fi
+	cat $conf
 
 	# select mode using enabled value
-	logger -p user.notice -t $log_tag "selecting mode"
 	if [ "$enabled" == 'true' -o "$enabled" == '1' -o "$enabled" == 'yes' ]
 	then
 		enabled='true'              # gnome enable
@@ -194,29 +182,25 @@ EOF
 	kde_ignorelist=`echo "${ignorelist}" | sed -e 's/\*\./\./g'`
 	
 	# wait if no users are logged in (up to 5 minutes)
-	#connect_timer=0
-	#while [ -z "$(users)" -a $connect_timer -lt 300 ]
-	#do
-	#	let connect_timer=connect_timer+10
-	#    logger -p user.notice -t $log_tag "sleeping for 10 seconds"
-	#	sleep 10
-	#done
+	connect_timer=0
+	while [ -z "$(users)" -a $connect_timer -lt 300 ]
+	do
+		let connect_timer=connect_timer+10
+		sleep 10
+	done
 	
 	# a user just logged in; give some time to settle things down
-	#if [ $connect_timer -gt 0 -a $connect_timer -lt 300 ]
-	#then
-	#    logger -p user.notice -t $log_tag "sleeping for 15 seconds"
-	#	sleep 15
-	#fi
-
-	if [ "$only_env" == 'false' -o "$only_env" == '0' -o "$only_env" == 'no' ]
+	if [ $connect_timer -gt 0 -a $connect_timer -lt 300 ]
 	then
-		machineid=$(dbus-uuidgen --get)
-		for user in `users | tr ' ' '\n' | sort --unique`
-		do
-			logger -p user.notice -t $log_tag "setting configuration for '$user'"
+		sleep 15
+	fi
 
-			cat <<EOS | su -l "$user"
+	machineid=$(dbus-uuidgen --get)
+	for user in `users | tr ' ' '\n' | sort --unique`
+	do
+		logger -p user.notice -t $log_tag "setting configuration for '$user'"
+
+		cat <<EOS | su -l "$user"
 export \$(DISPLAY=':0.0' dbus-launch --autolaunch="$machineid")
 
 # active or not
@@ -224,14 +208,14 @@ gconftool-2 --type bool --set /system/http_proxy/use_http_proxy "$enabled"
 gsettings set org.gnome.system.proxy.http enabled "$enabled"
 gconftool-2 --type string --set /system/proxy/mode "$gnome_mode"
 gsettings set org.gnome.system.proxy mode "$gnome_mode"
-kwriteconfig --file kioslaverc --group 'Proxy Settings' --key ProxyType "${kde_mode}"
+which kwriteconfig &> /dev/null && kwriteconfig --file kioslaverc --group 'Proxy Settings' --key ProxyType "${kde_mode}"
 
 # proxy settings
 gconftool-2 --type string --set /system/http_proxy/host "$proxy"
 gsettings set org.gnome.system.proxy.http host '"$proxy"'
 gconftool-2 --type int --set /system/http_proxy/port "$port"
 gsettings set org.gnome.system.proxy.http port "$port"
-kwriteconfig --file kioslaverc --group 'Proxy Settings' --key httpProxy "http://${proxy} ${port}/"
+which kwriteconfig &> /dev/null && kwriteconfig --file kioslaverc --group 'Proxy Settings' --key httpProxy "http://${proxy}:${port}/"
 
 gconftool-2 --type bool --set /system/http_proxy/use_same_proxy "$same"
 gsettings set org.gnome.system.proxy use-same-proxy "$same"
@@ -241,19 +225,19 @@ gconftool-2 --type string --set /system/proxy/secure_host "$https_proxy"
 gsettings set org.gnome.system.proxy.https host '"$https_proxy"'
 gconftool-2 --type int --set /system/proxy/secure_port "$https_port"
 gsettings set org.gnome.system.proxy.https port "$https_port"
-kwriteconfig --file kioslaverc --group 'Proxy Settings' --key httpsProxy "http://${https_proxy} ${https_port}/"
+which kwriteconfig &> /dev/null && kwriteconfig --file kioslaverc --group 'Proxy Settings' --key httpsProxy "http://${https_proxy}:${https_port}/"
 
 gconftool-2 --type string --set /system/proxy/ftp_host "$ftp_proxy"
 gsettings set org.gnome.system.proxy.ftp host '"$ftp_proxy"'
 gconftool-2 --type int --set /system/proxy/ftp_port "$ftp_port"
 gsettings set org.gnome.system.proxy.ftp port "$ftp_port"
-kwriteconfig --file kioslaverc --group 'Proxy Settings' --key ftpProxy "ftp://${ftp_proxy} ${ftp_port}/"
+which kwriteconfig &> /dev/null && kwriteconfig --file kioslaverc --group 'Proxy Settings' --key ftpProxy "ftp://${ftp_proxy}:${ftp_port}/"
 
 gconftool-2 --type string --set /system/proxy/socks_host "$socks_proxy"
 gsettings set org.gnome.system.proxy.socks host '"$socks_proxy"'
 gconftool-2 --type int --set /system/proxy/socks_port "$socks_port"
 gsettings set org.gnome.system.proxy.socks port "$socks_port"
-kwriteconfig --file kioslaverc --group 'Proxy Settings' --key socksProxy "http://${socks_proxy} ${socks_port}/"
+which kwriteconfig &> /dev/null && kwriteconfig --file kioslaverc --group 'Proxy Settings' --key socksProxy "http://${socks_proxy}:${socks_port}/"
 
 # authentication
 gconftool-2 --type bool --set /system/http_proxy/use_authentication "$auth"
@@ -263,24 +247,21 @@ gsettings set org.gnome.system.proxy.http authentication-user "$login"
 gconftool-2 --type string --set /system/http_proxy/authentication_password "$pass"
 gsettings set org.gnome.system.proxy.http authentication-password "$pass"
 # KDE Prompts 'as needed'
-kwriteconfig --file kioslaverc --group 'Proxy Settings' --key Authmode 0
+which kwriteconfig &> /dev/null && kwriteconfig --file kioslaverc --group 'Proxy Settings' --key Authmode 0
 
 # ignore-list
 gconftool-2 --type list --list-type string --set /system/http_proxy/ignore_hosts "${gnome2_ignorelist}"
 gsettings set org.gnome.system.proxy ignore-hosts "${gnome3_ignorelist}"
-kwriteconfig --file kioslaverc --group 'Proxy Settings' --key NoProxyFor "${kde_ignorelist}"
+which kwriteconfig &> /dev/null && kwriteconfig --file kioslaverc --group 'Proxy Settings' --key NoProxyFor "${kde_ignorelist}"
 
 # gconftool-2 --type string --set /system/proxy/autoconfig_url "${autoconfig_url}"
 # gsettings set org.gnome.system.proxy autoconfig-url "${autoconfig_url}"
-kwriteconfig --file kioslaverc --group 'Proxy Settings' --key 'Proxy Config Script' "${autoconfig_url}"
+which kwriteconfig &> /dev/null && kwriteconfig --file kioslaverc --group 'Proxy Settings' --key 'Proxy Config Script' "${autoconfig_url}"
 
 # When you modify kioslaverc, you need to tell KIO.
 dbus-send --type=signal /KIO/Scheduler org.kde.KIO.Scheduler.reparseSlaveConfiguration string:''
 EOS
-		done
-	else
-		logger -p user.notice -t $log_tag "skipped GNOME/KDE configuration"
-	fi
+	done
 
 	# setup shell variables
 	# this script should be called from /etc/bash.bashrc
