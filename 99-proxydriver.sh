@@ -285,7 +285,10 @@ EOS
 		echo "export ALL_PROXY='socks://${shell_auth}${socks_proxy}:${socks_port}/'" >> "$proxy_env"
 	 	echo "export no_proxy='${ignorelist}'" >> "$proxy_env"
 	 	echo "export NO_PROXY='${ignorelist}'" >> "$proxy_env"
-
+		PIDDIR="/tmp/proxydriver"
+		if [ -d "${PIDDIR}" ] ; then
+			rm -f "${PIDDIR}/*"
+		fi 
 	fi
 
 	logger -p user.notice -t $log_tag "configuration done."

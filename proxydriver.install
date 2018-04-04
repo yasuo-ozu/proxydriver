@@ -1,0 +1,9 @@
+post_install() {
+	SYS_PROFILE="/etc/profile"
+	PKG_PROFILE="/usr/proxyfilter/profile.sh"
+	PAYLOAD="\n"'if [ -x "'${PKG_PROFILE}'" ] ; then source "'${PKG_PROFILE}'" ; fi'"\n"
+	if cat "${SYS_PROFILE}" | grep "${PAYLOAD}" &> /dev/null ; then :
+	else
+		/bin/echo -e "${PAYLOAD}" >> ${SYS_PROFILE}
+	fi
+}
